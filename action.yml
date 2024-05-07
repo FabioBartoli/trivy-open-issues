@@ -1,0 +1,126 @@
+name: 'Trivy Scan and Generate Issues'
+inputs:
+  github_token:
+    description: 'GitHub Token'
+    required: true
+  severity:
+    description: 'Severity levels to check for vulnerabilities'
+    required: false
+    default: 'MEDIUM,CRITICAL,HIGH'
+  ignore-unfixed:
+    description: 'Defines whether unfixed vulnerabilities should be ignored'
+    required: false
+    default: true
+  skip-dirs:
+    description: 'Comma separated list of directories where traversal is skipped'
+    required: false
+    default: ""
+  skip-files: 
+    description: 'Comma separated list of files where traversal is skipped'
+    required: false
+    default: ""
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Checkout repository
+      uses: actions/checkout@v3
+
+    - name: Check if severity labels exist and create if not
+      id: check-labels
+      env:
+        GITHUB_TOKEN: ${{ inputs.github_token }}
+      shell: bash
+      run: |
+        for severity in $(echo "${{ inputs.severity }}" | tr ',' ' '); do
+          severity=$(echo "$severity")
+
+          case $severity in
+            LOW)
+              color="2cbe4e" ;;
+            MEDIUM)
+              color="ffd500" ;;
+            HIGH)
+              color="ff9f00" ;;
+            CRITICAL)
+              color="d73a49" ;;
+            *)
+              color="808080" ;;
+          esac
+
+          label_check=$(curl -s -o /dev/null -w "%{http_code}" -L \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $GITHUB_TOKEN" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            https://api.github.com/repos/${{ github.repository }}/labels/${severity})
+
+          #Verify if label already exists
+          if [[ $label_check -eq 200 ]]; then
+            continue
+          else #Create label
+            gh api \
+              --method POST \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              /repos/${{ github.repository }}/labels \
+              -f "name=$severity" -f "description=Trivy Labels" -f "color=$color"
+          fi
+        done
+
+    - name: Run Trivy to Open Issues
+      uses: aquasecurity/trivy-action@master
+      id: trivy-scan
+      with:
+        scan-type: 'fs'
+        format: 'json'
+        severity: ${{ inputs.severity }}
+        ignore-unfixed: ${{ inputs.ignore-unfixed }}
+        skip-dirs: ${{ inputs.skip-dirs }}
+        skip-files: ${{ inputs.skip-files }}
+        output: 'trivy.json'
+        exit-code: 1
+
+    - name: Open Issues for Vulnerabilities
+      if: failure() && steps.trivy-scan.outcome == 'failure'
+      env:
+        GITHUB_TOKEN: ${{ inputs.github_token }}
+      shell: bash
+      run: |
+        #Adjust the JSON to capture the information required for the Issue
+        cat trivy.json | jq -c '.Results[0].Vulnerabilities[]' | while IFS= read -r vulnerability; do
+          titleSeverity=$(echo "$vulnerability" | jq -r '.Severity')
+          titleName=$(echo "$vulnerability" | jq -r '.Title')
+          tilePackage=$(echo "$vulnerability" | jq -r '.PkgName')
+          title="$titleSeverity: $tilePackage - $titleName"
+          bodyDescription=$(echo "$vulnerability" | jq -r '.Description')
+          bodyReferences=$(echo "$vulnerability" | jq -r '.References | join("\n")')
+          body="Description:\n\n$bodyDescription\n\nReferences:\n\n$bodyReferences"
+
+          title=$(echo "$title" | sed 's/"/\\"/g')
+          body=$(echo "$body" | sed 's/"/\\"/g')
+          
+          #Open Issue
+          issue_response=$(curl -L -X POST -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $GITHUB_TOKEN" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            -H "Content-Type: application/json" \
+            https://api.github.com/repos/${{ github.repository }}/issues \
+            -d "{\"title\":\"$(echo $title)\",\"body\":\"$(echo $body)\"}")
+          issue_number=$(echo $issue_response | jq -r '.number')
+
+          #Attach correct label in the Issue
+          gh api \
+            --method POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            /repos/${{ github.repository }}/issues/$issue_number/labels \
+            -f "labels[]=$titleSeverity"
+        done
+
+    - name: No Vulnerabilities in The Code
+      if: success() && steps.trivy-scan.outcome == 'success'
+      env:
+        GITHUB_TOKEN: ${{ inputs.github_token }}
+      shell: bash
+      run: |
+        echo "No vulnerabilities found in the code"
