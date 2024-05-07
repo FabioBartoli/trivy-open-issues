@@ -1,5 +1,6 @@
 ## SUPPORT RS - BRAZIL
-![RS](./images/bandeira-do-rio-grande-do-sul.jpg){width=230 height=150}
+<img src="./images/bandeira-do-rio-grande-do-sul.jpg" width="230" height="150">
+
 The southern region of Brazil is being heavily affected by flooding. Almost 70% of the municipalities in Rio Grande do Sul have been hit by floods and more than 120,000 people are currently unsheltered.
 Please, if possible, make a donation in the Vakinha that I'm making available below. This Vakinha has no connection with the government and all the money will go to those who really need it
 https://vakinha.com.br/vaquinha/a-maior-campanha-solidaria-do-rs
